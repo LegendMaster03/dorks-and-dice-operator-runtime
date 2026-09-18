@@ -127,7 +127,7 @@ One Chromium browser and one authenticated context are used for the MVP. Browser
 
 If the context or browser is lost, the runtime discards the unusable context and requests a new Site bootstrap. If a failure happens during an operation that may already have caused a mutation, the runtime restores the session but returns an error with `actionReplayed: false`. It never silently repeats the original action.
 
-Snapshot element references are ephemeral. Navigation, click, key presses that may change page state, and session recovery invalidate them. Request a new snapshot after those operations.
+Snapshot element references are ephemeral. Any operation that can change application-owned DOM invalidates the current reference set. This includes navigation, click, fill, key press, and session recovery. Request a new snapshot before using another element reference after any of those operations.
 
 ## Navigation policy
 
@@ -143,6 +143,10 @@ Snapshot element references are ephemeral. Navigation, click, key presses that m
 
 Absolute URLs are accepted only when their scheme, host, and port exactly match `DORKS_SITE_URL`. Scheme-relative URLs, credential-bearing URLs, and unrelated origins are rejected.
 
+The same Site-origin restriction is enforced at the Playwright browser-context boundary for every top-level browsing context, not only for explicit `browser.navigate` calls. Foreign top-level redirects, link clicks, form submissions, Site-script navigation, and popups are blocked. If a foreign-origin page is ever reached despite interception, the context is treated as unusable and a fresh authenticated Site session is bootstrapped before later commands are accepted. Potentially mutating commands are never replayed during that recovery.
+
+Cross-origin subresources are not globally blocked. Normal Site pages may still load external images, fonts, scripts, styles, and similar resources. Service workers are disabled in the controlled context so they can not bypass Playwright request interception for the top-level navigation boundary.
+
 The runtime does not expose arbitrary JavaScript evaluation, shell execution, filesystem access, generic HTTP proxying, external-origin browsing, host Docker access, SSH, or unrestricted upload/download operations.
 
 ## Snapshot model
@@ -152,9 +156,11 @@ Snapshots return a concise semantic representation:
 - current URL and title;
 - headings;
 - bounded visible body text;
-- up to 500 interactive elements;
+- up to 500 visible, attached interactive elements;
 - runtime-issued references such as `e1`, `e2`, and `e3`;
-- role, accessible-ish name, input type, and disabled state.
+- role, common HTML/ARIA accessible name, input type, and disabled state.
+
+Hidden responsive duplicates and detached elements are omitted. Common `<label for>`, wrapped `<label>`, `aria-labelledby`, and `aria-label` naming are reflected in snapshot names.
 
 The runtime keeps the element handle behind each reference. Agents use those references with click, fill, or press rather than supplying JavaScript.
 

@@ -48,15 +48,16 @@ public sealed class BrowserSessionManager(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var session = _session;
-        var title = session is { Page.IsClosed: false }
-            ? await SafeTitleAsync(session.Page)
+        var sessionUsable = IsSessionUsable(session);
+        var title = sessionUsable
+            ? await SafeTitleAsync(session!.Page)
             : null;
 
         return new BrowserStatus(
             _playwright is not null,
             _browser?.IsConnected == true,
-            IsSessionUsable(session),
-            session is { Page.IsClosed: false } ? SanitizeUrl(session.Page.Url) : null,
+            sessionUsable,
+            sessionUsable ? SanitizeUrl(session!.Page.Url) : null,
             title,
             _identity?.UserId,
             _identity?.DisplayName);
@@ -68,13 +69,13 @@ public sealed class BrowserSessionManager(
             {
                 var targetUri = navigationPolicy.Resolve(target);
                 logger.LogInformation("Browser navigate to {Path}", targetUri.AbsolutePath);
+                session.ClearElementReferences();
                 var response = await session.Page.GotoAsync(targetUri.AbsoluteUri, new PageGotoOptions
                 {
                     WaitUntil = WaitUntilState.DOMContentLoaded,
                     Timeout = (float)options.BrowserTimeout.TotalMilliseconds
                 });
 
-                session.ClearElementReferences();
                 if (response is null)
                 {
                     throw new InvalidOperationException("Navigation did not produce a response.");
@@ -108,27 +109,46 @@ public sealed class BrowserSessionManager(
                 .Locator("a,button,input,textarea,select,[role],[contenteditable='true']")
                 .ElementHandlesAsync();
 
-            foreach (var handle in handles.Take(500))
+            foreach (var handle in handles)
             {
-                var role = await GetRoleAsync(handle);
-                var name = await GetElementNameAsync(handle);
-                var type = await handle.GetAttributeAsync("type");
-                var disabled = false;
+                if (elements.Count >= 500)
+                {
+                    break;
+                }
+
                 try
                 {
-                    disabled = await handle.IsDisabledAsync();
+                    var connected = await handle.EvaluateAsync<bool>("element => element.isConnected");
+                    if (!connected || !await handle.IsVisibleAsync())
+                    {
+                        continue;
+                    }
+
+                    var role = await GetRoleAsync(handle);
+                    var name = await GetElementNameAsync(handle);
+                    var type = await handle.GetAttributeAsync("type");
+                    var disabled = false;
+                    try
+                    {
+                        disabled = await handle.IsDisabledAsync();
+                    }
+                    catch (PlaywrightException)
+                    {
+                        // Some explicit-role elements do not implement disabled state.
+                    }
+
+                    elements.Add(new SnapshotElement(
+                        session.AddElementReference(handle),
+                        role,
+                        name,
+                        type,
+                        disabled));
                 }
                 catch (PlaywrightException)
                 {
-                    // Some explicit-role elements do not implement disabled state.
+                    // The DOM may rerender while a snapshot is being built.
+                    // Detached or otherwise unusable elements are omitted.
                 }
-
-                elements.Add(new SnapshotElement(
-                    session.AddElementReference(handle),
-                    role,
-                    name,
-                    type,
-                    disabled));
             }
 
             return new BrowserSnapshot(
@@ -144,11 +164,11 @@ public sealed class BrowserSessionManager(
             async session =>
             {
                 var element = session.ResolveElement(elementRef);
+                session.ClearElementReferences();
                 await element.ClickAsync(new ElementHandleClickOptions
                 {
                     Timeout = (float)options.BrowserTimeout.TotalMilliseconds
                 });
-                session.ClearElementReferences();
                 await WaitForPageSettleAsync(session.Page);
                 ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Click completed.");
@@ -160,6 +180,7 @@ public sealed class BrowserSessionManager(
             async session =>
             {
                 var element = session.ResolveElement(elementRef);
+                session.ClearElementReferences();
                 await element.FillAsync(value, new ElementHandleFillOptions
                 {
                     Timeout = (float)options.BrowserTimeout.TotalMilliseconds
@@ -177,16 +198,21 @@ public sealed class BrowserSessionManager(
                     throw new ArgumentException("A keyboard key is required.", nameof(key));
                 }
 
-                if (string.IsNullOrWhiteSpace(elementRef))
+                IElementHandle? element = null;
+                if (!string.IsNullOrWhiteSpace(elementRef))
+                {
+                    element = session.ResolveElement(elementRef);
+                }
+
+                session.ClearElementReferences();
+                if (element is null)
                 {
                     await session.Page.Keyboard.PressAsync(key);
                 }
                 else
                 {
-                    await session.ResolveElement(elementRef).PressAsync(key);
+                    await element.PressAsync(key);
                 }
-
-                session.ClearElementReferences();
                 await WaitForPageSettleAsync(session.Page);
                 ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Key press completed.");
@@ -220,15 +246,41 @@ public sealed class BrowserSessionManager(
         }
     }
 
+    internal int OpenPageCountForTest => _session?.Context.Pages.Count ?? 0;
+
     private Task<T> ExecutePageOperationAsync<T>(
         Func<BrowserSession, Task<T>> operation,
         CancellationToken cancellationToken) =>
         _operationGate.RunAsync(async () =>
         {
             var session = await EnsureSessionBeforeOperationAsync(cancellationToken);
+            var navigationVersion = session.NavigationBoundary.ViolationVersion;
             try
             {
-                return await operation(session);
+                var result = await operation(session);
+                if (session.NavigationBoundary.HasViolationSince(navigationVersion)
+                    || !IsControlledPageTrusted(session))
+                {
+                    throw new BrowserOriginBoundaryException();
+                }
+
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+                when (exception is BrowserOriginBoundaryException
+                    || session.NavigationBoundary.HasViolationSince(navigationVersion))
+            {
+                var recovered = await StabilizeAfterNavigationViolationAsync(session, cancellationToken);
+                throw new BrowserOperationException(
+                    recovered
+                        ? "A top-level navigation outside the configured Site origin or an uncontrolled popup was blocked. A fresh Site session was established, and the original operation was not replayed."
+                        : "A top-level navigation outside the configured Site origin or an uncontrolled popup was blocked. The original operation was not replayed.",
+                    recovered,
+                    exception);
             }
             catch (BrowserAuthenticationLostException exception)
             {
@@ -315,7 +367,12 @@ public sealed class BrowserSessionManager(
             throw new InvalidOperationException("Site returned a browser bootstrap URL outside the configured Site origin.");
         }
 
-        var context = await _browser.NewContextAsync();
+        var context = await _browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ServiceWorkers = ServiceWorkerPolicy.Block
+        });
+        var navigationBoundary = new BrowserNavigationBoundary(options.SiteUri);
+        await navigationBoundary.InstallRoutingAsync(context);
         var console = new BoundedBuffer<BrowserConsoleEntry>(DiagnosticBufferCapacity);
         var networkErrors = new BoundedBuffer<BrowserNetworkError>(DiagnosticBufferCapacity);
         var page = await context.NewPageAsync();
@@ -345,13 +402,17 @@ public sealed class BrowserSessionManager(
                 throw new InvalidOperationException("Browser bootstrap navigation returned no response.");
             }
 
-            if (new Uri(page.Url).AbsolutePath.StartsWith("/operator/bootstrap", StringComparison.OrdinalIgnoreCase))
+            if (!Uri.TryCreate(page.Url, UriKind.Absolute, out var bootstrapFinalUri)
+                || !NavigationPolicy.SameOrigin(options.SiteUri, bootstrapFinalUri)
+                || bootstrapFinalUri.AbsolutePath.StartsWith("/operator/bootstrap", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("Browser bootstrap did not redirect into a normal Site session.");
             }
 
             await VerifyAuthenticatedBrowserAsync(context, cancellationToken);
-            _session = new BrowserSession(context, page, console, networkErrors);
+            var session = new BrowserSession(context, page, console, networkErrors, navigationBoundary);
+            navigationBoundary.StartSinglePageEnforcement(context, page);
+            _session = session;
             logger.LogInformation(
                 "Authenticated Chromium Site session established from bootstrap {BootstrapId}",
                 bootstrap.BootstrapId);
@@ -478,17 +539,58 @@ public sealed class BrowserSessionManager(
 
     private static async Task<string?> GetElementNameAsync(IElementHandle element)
     {
-        foreach (var attribute in new[] { "aria-label", "name", "placeholder", "title", "alt" })
-        {
-            var value = NormalizeText(await element.GetAttributeAsync(attribute) ?? string.Empty);
-            if (value.Length > 0)
-            {
-                return Truncate(value, ElementNameLimit);
-            }
-        }
+        var value = await element.EvaluateAsync<string?>(
+            """
+            element => {
+                const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
 
-        var text = NormalizeText(await element.InnerTextAsync());
-        return text.Length == 0 ? null : Truncate(text, ElementNameLimit);
+                const labelledBy = normalize(element.getAttribute('aria-labelledby'));
+                if (labelledBy) {
+                    const text = labelledBy
+                        .split(/\s+/)
+                        .map(id => document.getElementById(id))
+                        .filter(Boolean)
+                        .map(node => normalize(node.textContent))
+                        .filter(Boolean)
+                        .join(' ');
+                    if (text) return text;
+                }
+
+                const ariaLabel = normalize(element.getAttribute('aria-label'));
+                if (ariaLabel) return ariaLabel;
+
+                if ('labels' in element && element.labels) {
+                    const text = Array.from(element.labels)
+                        .map(label => normalize(label.textContent))
+                        .filter(Boolean)
+                        .join(' ');
+                    if (text) return text;
+                }
+
+                const alt = normalize(element.getAttribute('alt'));
+                if (alt) return alt;
+
+                const tagName = element.tagName.toLowerCase();
+                const type = normalize(element.getAttribute('type')).toLowerCase();
+                if (tagName === 'input' && ['button', 'submit', 'reset'].includes(type)) {
+                    const inputValue = normalize(element.getAttribute('value'));
+                    if (inputValue) return inputValue;
+                }
+
+                const text = normalize(element.innerText || element.textContent);
+                if (text) return text;
+
+                for (const attribute of ['placeholder', 'title', 'name']) {
+                    const fallback = normalize(element.getAttribute(attribute));
+                    if (fallback) return fallback;
+                }
+
+                return null;
+            }
+            """);
+
+        var normalized = NormalizeText(value ?? string.Empty);
+        return normalized.Length == 0 ? null : Truncate(normalized, ElementNameLimit);
     }
 
     private async Task WaitForPageSettleAsync(IPage page)
@@ -518,8 +620,48 @@ public sealed class BrowserSessionManager(
         }
     }
 
-    private static bool IsSessionUsable(BrowserSession? session) =>
-        session is not null && !session.Page.IsClosed;
+    private bool IsSessionUsable(BrowserSession? session) =>
+        session is not null
+        && _browser?.IsConnected == true
+        && !session.Context.IsClosed
+        && session.Context.Pages.Count == 1
+        && IsControlledPageTrusted(session);
+
+    private bool IsControlledPageTrusted(BrowserSession session) =>
+        !session.Page.IsClosed
+        && Uri.TryCreate(session.Page.Url, UriKind.Absolute, out var uri)
+        && NavigationPolicy.SameOrigin(options.SiteUri, uri);
+
+    private async Task<bool> StabilizeAfterNavigationViolationAsync(
+        BrowserSession session,
+        CancellationToken cancellationToken)
+    {
+        await CloseUnexpectedPagesAsync(session);
+
+        if (IsSessionUsable(session))
+        {
+            return false;
+        }
+
+        return await TryRecoverAfterFailureAsync(cancellationToken);
+    }
+
+    private static async Task CloseUnexpectedPagesAsync(BrowserSession session)
+    {
+        foreach (var page in session.Context.Pages.Where(page => !ReferenceEquals(page, session.Page)).ToArray())
+        {
+            try
+            {
+                if (!page.IsClosed)
+                {
+                    await page.CloseAsync();
+                }
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+    }
 
     private bool LooksLikeSessionLoss(Exception exception, BrowserSession session)
     {
@@ -534,12 +676,19 @@ public sealed class BrowserSessionManager(
                 || exception.Message.Contains("browser has been closed", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static async Task<BrowserActionResult> ActionResultAsync(BrowserSession session, string message) =>
-        new(
+    private async Task<BrowserActionResult> ActionResultAsync(BrowserSession session, string message)
+    {
+        if (!IsControlledPageTrusted(session))
+        {
+            throw new BrowserOriginBoundaryException();
+        }
+
+        return new BrowserActionResult(
             true,
             SanitizeUrl(session.Page.Url) ?? session.Page.Url,
             await session.Page.TitleAsync(),
             message);
+    }
 
     private static async Task<string?> SafeTitleAsync(IPage page)
     {
@@ -567,6 +716,14 @@ public sealed class BrowserSessionManager(
         }
 
         return uri.GetLeftPart(UriPartial.Path);
+    }
+
+    private sealed class BrowserOriginBoundaryException : Exception
+    {
+        public BrowserOriginBoundaryException()
+            : base("The controlled browser page crossed the configured Site-origin boundary.")
+        {
+        }
     }
 
     public async ValueTask DisposeAsync()
