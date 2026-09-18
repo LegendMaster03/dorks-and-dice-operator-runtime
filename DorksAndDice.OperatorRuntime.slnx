@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/DorksAndDice.OperatorRuntime/DorksAndDice.OperatorRuntime.csproj" />
+  <Project Path="tests/DorksAndDice.OperatorRuntime.Tests/DorksAndDice.OperatorRuntime.Tests.csproj" />
+</Solution>
