@@ -1,0 +1,7 @@
+bin/
+obj/
+TestResults/
+playwright-report/
+.env
+.env.*
+!.env.example
