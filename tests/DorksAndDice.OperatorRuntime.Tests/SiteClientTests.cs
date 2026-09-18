@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using DorksAndDice.OperatorRuntime.Configuration;
 using DorksAndDice.OperatorRuntime.Site;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DorksAndDice.OperatorRuntime.Tests;
@@ -40,9 +41,14 @@ public sealed class SiteClientTests
         });
 
         using var httpClient = new HttpClient(handler);
-        var client = CreateClient(httpClient, secret);
+        var logger = new RecordingLogger<OperatorBootstrapClient>();
+        var client = CreateClient(httpClient, secret, logger);
         await client.GetCurrentOperatorAsync();
         await client.CreateBrowserBootstrapAsync();
+
+        Assert.DoesNotContain(
+            logger.Messages,
+            message => message.Contains(secret, StringComparison.Ordinal));
 
         Assert.Collection(
             handler.Requests,
@@ -64,16 +70,23 @@ public sealed class SiteClientTests
         const string secret = "ddop_v1_never_print_this_secret";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
         using var httpClient = new HttpClient(handler);
-        var client = CreateClient(httpClient, secret);
+        var logger = new RecordingLogger<OperatorBootstrapClient>();
+        var client = CreateClient(httpClient, secret, logger);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => client.GetCurrentOperatorAsync());
 
         Assert.DoesNotContain(secret, exception.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            logger.Messages,
+            message => message.Contains(secret, StringComparison.Ordinal));
         Assert.Contains("401", exception.Message, StringComparison.Ordinal);
     }
 
-    private static OperatorBootstrapClient CreateClient(HttpClient httpClient, string secret)
+    private static OperatorBootstrapClient CreateClient(
+        HttpClient httpClient,
+        string secret,
+        ILogger<OperatorBootstrapClient>? logger = null)
     {
         var options = new OperatorRuntimeOptions
         {
@@ -85,7 +98,30 @@ public sealed class SiteClientTests
         return new OperatorBootstrapClient(
             httpClient,
             options,
-            NullLogger<OperatorBootstrapClient>.Instance);
+            logger ?? NullLogger<OperatorBootstrapClient>.Instance);
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+            if (exception is not null)
+            {
+                Messages.Add(exception.ToString());
+            }
+        }
     }
 
     private sealed class RecordingHandler(
