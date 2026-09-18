@@ -53,11 +53,11 @@ internal sealed class BrowserNavigationBoundary(Uri siteUri)
         {
             var request = route.Request;
             if (request.IsNavigationRequest
-                && IsTopLevelNavigation(request, context)
+                && await IsTopLevelNavigationAsync(request)
                 && !IsSiteOrigin(request.Url))
             {
                 RecordViolation();
-                await route.AbortAsync();
+                await route.AbortAsync("blockedbyclient");
                 return;
             }
 
@@ -96,7 +96,7 @@ internal sealed class BrowserNavigationBoundary(Uri siteUri)
         Uri.TryCreate(url, UriKind.Absolute, out var uri)
         && NavigationPolicy.SameOrigin(siteUri, uri);
 
-    private static bool IsTopLevelNavigation(IRequest request, IBrowserContext context)
+    private static async Task<bool> IsTopLevelNavigationAsync(IRequest request)
     {
         try
         {
@@ -104,9 +104,13 @@ internal sealed class BrowserNavigationBoundary(Uri siteUri)
         }
         catch (PlaywrightException)
         {
-            // A popup navigation can be issued before Playwright exposes its frame.
-            // A second page is a reliable signal that this is not a subframe request.
-            return context.Pages.Count > 1;
+            // Playwright documents that a navigation request can be emitted before
+            // its frame exists. Chromium still identifies the destination type:
+            // top-level pages/popups use "document"; embedded frames use "iframe"
+            // or "frame". Treat unknown frame-less navigation conservatively.
+            var destination = await request.HeaderValueAsync("sec-fetch-dest");
+            return !string.Equals(destination, "iframe", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(destination, "frame", StringComparison.OrdinalIgnoreCase);
         }
     }
 
