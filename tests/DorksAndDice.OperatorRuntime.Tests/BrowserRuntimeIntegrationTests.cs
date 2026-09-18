@@ -130,22 +130,32 @@ public sealed class BrowserRuntimeIntegrationTests
             System.Text.Json.JsonSerializer.Serialize(networkErrors),
             StringComparison.Ordinal);
 
+        var bootstrapsBeforeContextLoss =
+            site.Requests.Count(request => request.Path == "/operator/v1/browser-bootstrap");
+        await manager.ForceContextLossForTestAsync();
+        var contextRecovery = await manager.NavigateAsync("/");
+        Assert.True(contextRecovery.Success);
+        Assert.True(
+            site.Requests.Count(request => request.Path == "/operator/v1/browser-bootstrap")
+            > bootstrapsBeforeContextLoss);
+
         await manager.NavigateAsync("/mutating");
         var mutatingSnapshot = await manager.SnapshotAsync();
-        var mutate = Assert.Single(mutatingSnapshot.Elements, element => element.Name == "Mutate slowly");
+        var mutate = Assert.Single(mutatingSnapshot.Elements, element => element.Name == "Mutate once");
 
-        var clickTask = manager.ClickAsync(mutate.Ref);
-        await site.MutationStarted.WaitAsync(TimeSpan.FromSeconds(10));
-        await manager.ForceContextLossForTestAsync();
-        site.ReleaseMutation();
+        var bootstrapsBeforeMutation =
+            site.Requests.Count(request => request.Path == "/operator/v1/browser-bootstrap");
+        var mutationFailure = await Assert.ThrowsAsync<BrowserOperationException>(
+            () => manager.ClickAsync(mutate.Ref));
 
-        var mutationFailure = await Assert.ThrowsAsync<BrowserOperationException>(() => clickTask);
         Assert.True(mutationFailure.SessionRecovered);
         Assert.Equal(1, site.MutationCount);
+        Assert.True(
+            site.Requests.Count(request => request.Path == "/operator/v1/browser-bootstrap")
+            > bootstrapsBeforeMutation);
 
         var recovered = await manager.GetStatusAsync();
         Assert.True(recovered.AuthenticatedSessionAvailable);
-        Assert.True(site.Requests.Count(request => request.Path == "/operator/v1/browser-bootstrap") >= 2);
 
         await manager.NavigateAsync("/");
         Assert.Equal(1, site.MutationCount);

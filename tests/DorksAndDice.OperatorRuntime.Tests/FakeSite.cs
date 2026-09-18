@@ -15,10 +15,6 @@ internal sealed class FakeSite : IAsyncDisposable
 
     private readonly WebApplication _app;
     private readonly ConcurrentDictionary<string, byte> _bootstraps = new(StringComparer.Ordinal);
-    private readonly TaskCompletionSource _mutationStarted =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource _mutationRelease =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _mutationCount;
 
     private FakeSite(bool rejectOperator)
@@ -136,11 +132,11 @@ internal sealed class FakeSite : IAsyncDisposable
         _app.MapGet("/mutating", (HttpContext context) =>
             BrowserAuthorized(context)
                 ? Results.Content(
-                    "<html><head><title>Mutating</title></head><body><h1>Mutating</h1><form method='post' action='/mutate-slow'><button type='submit' aria-label='Mutate slowly'>Mutate slowly</button></form></body></html>",
+                    "<html><head><title>Mutating</title></head><body><h1>Mutating</h1><form method='post' action='/mutate-and-expire'><button type='submit' aria-label='Mutate once'>Mutate once</button></form></body></html>",
                     "text/html")
                 : Results.Redirect("/account/login"));
 
-        _app.MapPost("/mutate-slow", async (HttpContext context) =>
+        _app.MapPost("/mutate-and-expire", (HttpContext context) =>
         {
             if (!BrowserAuthorized(context))
             {
@@ -148,9 +144,8 @@ internal sealed class FakeSite : IAsyncDisposable
             }
 
             Interlocked.Increment(ref _mutationCount);
-            _mutationStarted.TrySetResult();
-            await Task.WhenAny(_mutationRelease.Task, Task.Delay(TimeSpan.FromSeconds(5)));
-            return Results.Content("<html><body><h1>Mutation complete</h1></body></html>", "text/html");
+            context.Response.Cookies.Delete(AuthCookieName, new CookieOptions { Path = "/" });
+            return Results.Redirect("/account/login");
         });
     }
 
@@ -161,7 +156,6 @@ internal sealed class FakeSite : IAsyncDisposable
     public string? LastBootstrapUrl { get; private set; }
     public ConcurrentQueue<RequestRecord> Requests { get; } = new();
     public int MutationCount => Volatile.Read(ref _mutationCount);
-    public Task MutationStarted => _mutationStarted.Task;
 
     public static async Task<FakeSite> StartAsync(bool rejectOperator = false)
     {
@@ -173,8 +167,6 @@ internal sealed class FakeSite : IAsyncDisposable
         site.SiteUri = new Uri(addresses.Single().TrimEnd('/') + "/");
         return site;
     }
-
-    public void ReleaseMutation() => _mutationRelease.TrySetResult();
 
     private bool OperatorAuthorized(HttpContext context) =>
         !RejectOperator
@@ -189,7 +181,6 @@ internal sealed class FakeSite : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        ReleaseMutation();
         await _app.StopAsync();
         await _app.DisposeAsync();
     }
