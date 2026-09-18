@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Net;
 using DorksAndDice.OperatorRuntime.Browser;
 using DorksAndDice.OperatorRuntime.Configuration;
@@ -21,6 +22,41 @@ public sealed class BrowserRuntimeIntegrationTests
         Assert.Contains("401", exception.Message, StringComparison.Ordinal);
         Assert.False(status.PlaywrightInitialized);
         Assert.False(status.AuthenticatedSessionAvailable);
+    }
+
+    [Fact]
+    public async Task BootstrapNavigationFailureDoesNotExposeOneUseToken()
+    {
+        const string bootstrapSecret = "bootstrap-token-must-not-leak";
+        var options = new OperatorRuntimeOptions
+        {
+            SiteUri = new Uri("http://127.0.0.1:9/"),
+            OperatorToken = "ddop_v1_test_operator_secret",
+            RuntimeApiToken = "runtime-api-test-secret",
+            BrowserTimeout = TimeSpan.FromSeconds(3),
+            Headless = true
+        };
+
+        using var httpClient = new HttpClient(new OperatorFixtureHandler(bootstrapSecret))
+        {
+            Timeout = TimeSpan.FromSeconds(5)
+        };
+        var operatorClient = new OperatorBootstrapClient(
+            httpClient,
+            options,
+            NullLogger<OperatorBootstrapClient>.Instance);
+        await using var manager = new BrowserSessionManager(
+            options,
+            operatorClient,
+            new NavigationPolicy(options),
+            NullLogger<BrowserSessionManager>.Instance);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.InitializeAsync());
+
+        Assert.DoesNotContain(bootstrapSecret, exception.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("token=", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Browser bootstrap navigation failed.", exception.Message);
     }
 
     [Fact]
@@ -117,6 +153,43 @@ public sealed class BrowserRuntimeIntegrationTests
         Assert.All(
             site.Requests.Where(request => !request.Path.StartsWith("/operator/v1", StringComparison.Ordinal)),
             request => Assert.True(string.IsNullOrEmpty(request.Authorization)));
+    }
+
+    private sealed class OperatorFixtureHandler(string bootstrapSecret) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath == "/operator/v1/me")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        userId = Guid.Parse("7f1f78e8-6f61-42db-988a-2333a0e5eafd"),
+                        displayName = "Operator Runtime Test",
+                        accountKind = "ServicePrincipal",
+                        globalRoles = Array.Empty<string>()
+                    })
+                });
+            }
+
+            if (request.RequestUri.AbsolutePath == "/operator/v1/browser-bootstrap")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        bootstrapId = Guid.NewGuid(),
+                        bootstrapUrl = $"/operator/bootstrap?token={bootstrapSecret}",
+                        expiresAt = DateTimeOffset.UtcNow.AddMinutes(1)
+                    })
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
     }
 
     private sealed class RuntimeHarness(

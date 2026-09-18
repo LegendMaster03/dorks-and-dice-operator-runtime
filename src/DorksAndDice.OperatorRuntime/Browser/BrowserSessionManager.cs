@@ -272,7 +272,9 @@ public sealed class BrowserSessionManager(
         }
         catch (Exception recoveryException)
         {
-            logger.LogError(recoveryException, "Browser session recovery failed");
+            logger.LogWarning(
+                "Browser session recovery failed with {FailureType}",
+                recoveryException.GetType().Name);
             return false;
         }
     }
@@ -321,11 +323,22 @@ public sealed class BrowserSessionManager(
 
         try
         {
-            var response = await page.GotoAsync(bootstrapUri.AbsoluteUri, new PageGotoOptions
+            IResponse? response;
+            try
             {
-                WaitUntil = WaitUntilState.DOMContentLoaded,
-                Timeout = (float)options.BrowserTimeout.TotalMilliseconds
-            });
+                response = await page.GotoAsync(bootstrapUri.AbsoluteUri, new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = (float)options.BrowserTimeout.TotalMilliseconds
+                });
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(
+                    "Browser bootstrap navigation failed with {FailureType}",
+                    exception.GetType().Name);
+                throw new InvalidOperationException("Browser bootstrap navigation failed.");
+            }
 
             if (response is null)
             {
@@ -345,7 +358,15 @@ public sealed class BrowserSessionManager(
         }
         catch
         {
-            await context.CloseAsync();
+            try
+            {
+                await context.CloseAsync();
+            }
+            catch (PlaywrightException)
+            {
+                // Preserve the already-sanitized bootstrap/session failure.
+            }
+
             throw;
         }
     }
