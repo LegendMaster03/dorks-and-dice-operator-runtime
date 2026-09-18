@@ -632,35 +632,16 @@ public sealed class BrowserSessionManager(
         && Uri.TryCreate(session.Page.Url, UriKind.Absolute, out var uri)
         && NavigationPolicy.SameOrigin(options.SiteUri, uri);
 
-    private async Task<bool> StabilizeAfterNavigationViolationAsync(
+    private Task<bool> StabilizeAfterNavigationViolationAsync(
         BrowserSession session,
         CancellationToken cancellationToken)
     {
-        await CloseUnexpectedPagesAsync(session);
-
-        if (IsSessionUsable(session))
-        {
-            return false;
-        }
-
-        return await TryRecoverAfterFailureAsync(cancellationToken);
-    }
-
-    private static async Task CloseUnexpectedPagesAsync(BrowserSession session)
-    {
-        foreach (var page in session.Context.Pages.Where(page => !ReferenceEquals(page, session.Page)).ToArray())
-        {
-            try
-            {
-                if (!page.IsClosed)
-                {
-                    await page.CloseAsync();
-                }
-            }
-            catch (PlaywrightException)
-            {
-            }
-        }
+        // An aborted top-level navigation can asynchronously commit Chromium's
+        // internal error page after the initiating Playwright action returns.
+        // Always discard the affected context so no foreign or error-page state
+        // can become the next usable Operator Runtime session.
+        session.ClearElementReferences();
+        return TryRecoverAfterFailureAsync(cancellationToken);
     }
 
     private bool LooksLikeSessionLoss(Exception exception, BrowserSession session)

@@ -357,10 +357,10 @@ public sealed class BrowserRuntimeIntegrationTests
         var status = await manager.GetStatusAsync();
         Assert.True(status.AuthenticatedSessionAvailable);
         Assert.NotNull(status.CurrentUrl);
-        Assert.True(
-            status.CurrentUrl.StartsWith(
-                site.SiteUri.GetLeftPart(UriPartial.Authority),
-                StringComparison.OrdinalIgnoreCase));
+        Assert.StartsWith(
+            site.SiteUri.GetLeftPart(UriPartial.Authority),
+            status.CurrentUrl,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class OperatorFixtureHandler(string bootstrapSecret) : HttpMessageHandler
