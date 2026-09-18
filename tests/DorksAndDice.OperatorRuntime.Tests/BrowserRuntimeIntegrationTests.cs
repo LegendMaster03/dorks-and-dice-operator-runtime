@@ -98,14 +98,14 @@ public sealed class BrowserRuntimeIntegrationTests
         var snapshot = await manager.SnapshotAsync();
         Assert.Contains("Runtime Test Home", snapshot.Headings);
         Assert.Contains(snapshot.Elements, element => element.Role == "link" && element.Name == "Rules Core");
-        var increment = Assert.Single(snapshot.Elements.Where(element => element.Name == "Increment"));
+        var increment = Assert.Single(snapshot.Elements, element => element.Name == "Increment");
         Assert.Equal("button", increment.Role);
 
         await manager.ClickAsync(increment.Ref);
         var afterClick = await manager.SnapshotAsync();
         Assert.Contains(" 1", " " + afterClick.Text, StringComparison.Ordinal);
 
-        var search = Assert.Single(afterClick.Elements.Where(element => element.Name == "Search"));
+        var search = Assert.Single(afterClick.Elements, element => element.Name == "Search");
         Assert.Equal("textbox", search.Role);
         await manager.FillAsync(search.Ref, "Alice");
         var afterPress = await manager.PressAsync(search.Ref, "Enter");
@@ -132,7 +132,7 @@ public sealed class BrowserRuntimeIntegrationTests
 
         await manager.NavigateAsync("/mutating");
         var mutatingSnapshot = await manager.SnapshotAsync();
-        var mutate = Assert.Single(mutatingSnapshot.Elements.Where(element => element.Name == "Mutate slowly"));
+        var mutate = Assert.Single(mutatingSnapshot.Elements, element => element.Name == "Mutate slowly");
 
         var clickTask = manager.ClickAsync(mutate.Ref);
         await site.MutationStarted.WaitAsync(TimeSpan.FromSeconds(10));
@@ -193,7 +193,6 @@ public sealed class BrowserRuntimeIntegrationTests
     }
 
     private sealed class RuntimeHarness(
-        FakeSite site,
         HttpClient httpClient,
         BrowserSessionManager manager) : IAsyncDisposable
     {
@@ -233,7 +232,7 @@ public sealed class BrowserRuntimeIntegrationTests
                 await manager.InitializeAsync();
             }
 
-            return new RuntimeHarness(site, httpClient, manager);
+            return new RuntimeHarness(httpClient, manager);
         }
 
         public async ValueTask DisposeAsync()
