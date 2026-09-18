@@ -42,16 +42,41 @@ internal sealed class BrowserSession(
 internal sealed class BrowserNavigationBoundary(Uri siteUri)
 {
     private long _violationVersion;
+    private long _navigationActivityVersion;
 
     public long ViolationVersion => Interlocked.Read(ref _violationVersion);
 
     public bool HasViolationSince(long version) => ViolationVersion != version;
+
+    public async Task WaitForNavigationQuiescenceAsync(CancellationToken cancellationToken)
+    {
+        // Popup/document requests may be delivered just after the Playwright
+        // action itself resolves. Wait until navigation activity has remained
+        // unchanged for one short interval, with a bounded upper limit.
+        var observedVersion = Interlocked.Read(ref _navigationActivityVersion);
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            var currentVersion = Interlocked.Read(ref _navigationActivityVersion);
+            if (currentVersion == observedVersion)
+            {
+                return;
+            }
+
+            observedVersion = currentVersion;
+        }
+    }
 
     public async Task InstallRoutingAsync(IBrowserContext context)
     {
         await context.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
+            if (request.IsNavigationRequest)
+            {
+                Interlocked.Increment(ref _navigationActivityVersion);
+            }
+
             if (request.IsNavigationRequest
                 && await IsTopLevelNavigationAsync(request)
                 && !IsSiteOrigin(request.Url))

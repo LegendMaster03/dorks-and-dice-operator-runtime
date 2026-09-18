@@ -258,6 +258,7 @@ public sealed class BrowserSessionManager(
             try
             {
                 var result = await operation(session);
+                await session.NavigationBoundary.WaitForNavigationQuiescenceAsync(cancellationToken);
                 if (session.NavigationBoundary.HasViolationSince(navigationVersion)
                     || !IsControlledPageTrusted(session))
                 {
