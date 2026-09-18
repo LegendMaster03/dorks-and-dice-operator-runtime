@@ -1,0 +1,32 @@
+name: validation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright/dotnet:v1.62.0-noble
+      options: --user 1001 --ipc=host
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore DorksAndDice.OperatorRuntime.slnx
+
+      - name: Build
+        run: dotnet build DorksAndDice.OperatorRuntime.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test DorksAndDice.OperatorRuntime.slnx --configuration Release --no-build --logger "console;verbosity=normal"

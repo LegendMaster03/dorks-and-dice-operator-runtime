@@ -72,3 +72,11 @@ public sealed class BrowserOperationException(
 {
     public bool SessionRecovered { get; } = sessionRecovered;
 }
+
+internal sealed class BrowserAuthenticationLostException : Exception
+{
+    public BrowserAuthenticationLostException()
+        : base("The Site browser session is no longer authenticated.")
+    {
+    }
+}

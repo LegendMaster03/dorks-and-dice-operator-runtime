@@ -39,11 +39,14 @@ public sealed class BrowserSessionManager(
         }
 
         await RecoverSessionCoreAsync(cancellationToken);
-        logger.LogInformation("Operator Runtime browser initialized for Site origin {SiteOrigin}", options.SiteUri.GetLeftPart(UriPartial.Authority));
+        logger.LogInformation(
+            "Operator Runtime browser initialized for Site origin {SiteOrigin}",
+            options.SiteUri.GetLeftPart(UriPartial.Authority));
     }
 
     public async Task<BrowserStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var session = _session;
         var title = session is { Page.IsClosed: false }
             ? await SafeTitleAsync(session.Page)
@@ -77,7 +80,7 @@ public sealed class BrowserSessionManager(
                     throw new InvalidOperationException("Navigation did not produce a response.");
                 }
 
-                await DetectAuthenticationLossAsync(session, response);
+                ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Navigation completed.");
             },
             cancellationToken);
@@ -117,7 +120,7 @@ public sealed class BrowserSessionManager(
                 }
                 catch (PlaywrightException)
                 {
-                    // Not all interactive-role elements implement disabled state.
+                    // Some explicit-role elements do not implement disabled state.
                 }
 
                 elements.Add(new SnapshotElement(
@@ -146,10 +149,8 @@ public sealed class BrowserSessionManager(
                     Timeout = (float)options.BrowserTimeout.TotalMilliseconds
                 });
                 session.ClearElementReferences();
-                await session.Page.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new PageWaitForLoadStateOptions
-                {
-                    Timeout = (float)Math.Min(options.BrowserTimeout.TotalMilliseconds, 3_000)
-                }).ContinueWith(_ => { }, TaskScheduler.Default);
+                await WaitForPageSettleAsync(session.Page);
+                ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Click completed.");
             },
             cancellationToken);
@@ -186,6 +187,8 @@ public sealed class BrowserSessionManager(
                 }
 
                 session.ClearElementReferences();
+                await WaitForPageSettleAsync(session.Page);
+                ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Key press completed.");
             },
             cancellationToken);
@@ -226,6 +229,16 @@ public sealed class BrowserSessionManager(
             try
             {
                 return await operation(session);
+            }
+            catch (BrowserAuthenticationLostException exception)
+            {
+                var recovered = await TryRecoverAfterFailureAsync(cancellationToken);
+                throw new BrowserOperationException(
+                    recovered
+                        ? "The Site session was rejected. A fresh session was established, but the original operation was not replayed."
+                        : "The Site session was rejected and recovery failed. The original operation was not replayed.",
+                    recovered,
+                    exception);
             }
             catch (Exception exception) when (LooksLikeSessionLoss(exception, session))
             {
@@ -326,7 +339,9 @@ public sealed class BrowserSessionManager(
 
             await VerifyAuthenticatedBrowserAsync(context, cancellationToken);
             _session = new BrowserSession(context, page, console, networkErrors);
-            logger.LogInformation("Authenticated Chromium Site session established from bootstrap {BootstrapId}", bootstrap.BootstrapId);
+            logger.LogInformation(
+                "Authenticated Chromium Site session established from bootstrap {BootstrapId}",
+                bootstrap.BootstrapId);
         }
         catch
         {
@@ -353,13 +368,15 @@ public sealed class BrowserSessionManager(
 
             if (!authenticated)
             {
-                throw new InvalidOperationException("Browser bootstrap did not establish an authenticated normal Site session.");
+                throw new InvalidOperationException(
+                    "Browser bootstrap did not establish an authenticated normal Site session.");
             }
 
             var cookies = await context.CookiesAsync([options.SiteUri.AbsoluteUri]);
             if (cookies.Count == 0)
             {
-                throw new InvalidOperationException("Authenticated Site verification succeeded without a browser cookie.");
+                throw new InvalidOperationException(
+                    "Authenticated Site verification succeeded without a browser cookie.");
             }
         }
         finally
@@ -368,18 +385,6 @@ public sealed class BrowserSessionManager(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-    }
-
-    private static async Task DetectAuthenticationLossAsync(BrowserSession session, IResponse response)
-    {
-        var uri = new Uri(session.Page.Url);
-        if (uri.AbsolutePath.StartsWith("/account/login", StringComparison.OrdinalIgnoreCase)
-            && response.Status == StatusCodes.Status200OK)
-        {
-            throw new BrowserOperationException("The Site browser session is no longer authenticated.", false);
-        }
-
-        await Task.CompletedTask;
     }
 
     private void AttachDiagnostics(
@@ -465,6 +470,33 @@ public sealed class BrowserSessionManager(
         return text.Length == 0 ? null : Truncate(text, ElementNameLimit);
     }
 
+    private async Task WaitForPageSettleAsync(IPage page)
+    {
+        try
+        {
+            await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new PageWaitForLoadStateOptions
+            {
+                Timeout = (float)Math.Min(options.BrowserTimeout.TotalMilliseconds, 3_000)
+            });
+        }
+        catch (PlaywrightException)
+        {
+            if (page.IsClosed)
+            {
+                throw;
+            }
+        }
+    }
+
+    private static void ThrowIfAuthenticationLost(BrowserSession session)
+    {
+        if (Uri.TryCreate(session.Page.Url, UriKind.Absolute, out var uri)
+            && uri.AbsolutePath.StartsWith("/account/login", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BrowserAuthenticationLostException();
+        }
+    }
+
     private static bool IsSessionUsable(BrowserSession? session) =>
         session is not null && !session.Page.IsClosed;
 
@@ -526,12 +558,24 @@ public sealed class BrowserSessionManager(
         _disposed = true;
         if (_session is not null)
         {
-            await _session.Context.CloseAsync();
+            try
+            {
+                await _session.Context.CloseAsync();
+            }
+            catch (PlaywrightException)
+            {
+            }
         }
 
         if (_browser is not null)
         {
-            await _browser.CloseAsync();
+            try
+            {
+                await _browser.CloseAsync();
+            }
+            catch (PlaywrightException)
+            {
+            }
         }
 
         _playwright?.Dispose();
