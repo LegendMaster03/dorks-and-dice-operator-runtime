@@ -55,7 +55,7 @@ public sealed class BrowserRuntimeIntegrationTests
         Assert.True(rulesCore.Success);
         Assert.EndsWith("/tools/rules-core", rulesCore.Url, StringComparison.Ordinal);
         Assert.Equal("Rules Core", rulesCore.Title);
-        Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<InvalidOperationException>(
             () => manager.NavigateAsync("https://example.com/"));
 
         await manager.NavigateAsync("/");
