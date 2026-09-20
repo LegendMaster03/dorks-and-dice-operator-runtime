@@ -14,6 +14,7 @@ internal sealed class FakeSite : IAsyncDisposable
     private const string AuthCookieValue = "normal-site-session";
 
     private readonly WebApplication _app;
+    private readonly WebApplication _externalApp;
     private readonly ConcurrentDictionary<string, byte> _bootstraps = new(StringComparer.Ordinal);
     private int _mutationCount;
 
@@ -21,6 +22,14 @@ internal sealed class FakeSite : IAsyncDisposable
     {
         RejectOperator = rejectOperator;
         OperatorToken = "ddop_v1_test_fixture_operator_secret";
+
+        var externalBuilder = WebApplication.CreateBuilder();
+        externalBuilder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
+        _externalApp = externalBuilder.Build();
+        _externalApp.MapGet("/external-script.js", () =>
+            Results.Text(
+                "document.getElementById('subresource-status').textContent='cross-origin-loaded';",
+                "application/javascript"));
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
@@ -107,6 +116,36 @@ internal sealed class FakeSite : IAsyncDisposable
                 ? Results.Content("<html><head><title>Rules Core</title></head><body><h1>Rules Core</h1></body></html>", "text/html")
                 : Results.Redirect("/account/login"));
 
+        _app.MapGet("/same-origin-destination", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content("<html><head><title>Same Origin</title></head><body><h1>Same Origin</h1></body></html>", "text/html")
+                : Results.Redirect("/account/login"));
+
+        _app.MapGet("/same-origin-redirect", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Redirect("/same-origin-destination")
+                : Results.Redirect("/account/login"));
+
+        _app.MapGet("/external-redirect", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Redirect("https://example.com/")
+                : Results.Redirect("/account/login"));
+
+        _app.MapGet("/navigation-fixture", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content(NavigationFixturePage, "text/html")
+                : Results.Redirect("/account/login"));
+
+        _app.MapGet("/snapshot-fixture", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content(SnapshotFixturePage, "text/html")
+                : Results.Redirect("/account/login"));
+
+        _app.MapGet("/cross-origin-subresource", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content(CrossOriginSubresourcePage, "text/html")
+                : Results.Redirect("/account/login"));
+
         _app.MapGet("/submitted", (HttpContext context) =>
         {
             if (!BrowserAuthorized(context))
@@ -153,6 +192,7 @@ internal sealed class FakeSite : IAsyncDisposable
     public string OperatorToken { get; }
     public bool RejectOperator { get; }
     public Uri SiteUri { get; private set; } = null!;
+    public Uri ExternalSiteUri { get; private set; } = null!;
     public string? LastBootstrapUrl { get; private set; }
     public ConcurrentQueue<RequestRecord> Requests { get; } = new();
     public int MutationCount => Volatile.Read(ref _mutationCount);
@@ -160,12 +200,19 @@ internal sealed class FakeSite : IAsyncDisposable
     public static async Task<FakeSite> StartAsync(bool rejectOperator = false)
     {
         var site = new FakeSite(rejectOperator);
+        await site._externalApp.StartAsync();
+        site.ExternalSiteUri = ResolveListeningUri(site._externalApp, "Fake external origin");
         await site._app.StartAsync();
-        var server = site._app.Services.GetRequiredService<IServer>();
-        var addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses
-            ?? throw new InvalidOperationException("Fake Site did not expose a listening address.");
-        site.SiteUri = new Uri(addresses.Single().TrimEnd('/') + "/");
+        site.SiteUri = ResolveListeningUri(site._app, "Fake Site");
         return site;
+    }
+
+    private static Uri ResolveListeningUri(WebApplication app, string name)
+    {
+        var server = app.Services.GetRequiredService<IServer>();
+        var addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses
+            ?? throw new InvalidOperationException($"{name} did not expose a listening address.");
+        return new Uri(addresses.Single().TrimEnd('/') + "/");
     }
 
     private bool OperatorAuthorized(HttpContext context) =>
@@ -183,7 +230,68 @@ internal sealed class FakeSite : IAsyncDisposable
     {
         await _app.StopAsync();
         await _app.DisposeAsync();
+        await _externalApp.StopAsync();
+        await _externalApp.DisposeAsync();
     }
+
+    private string CrossOriginSubresourcePage => $"""
+        <html>
+          <head><title>Cross-origin subresource</title></head>
+          <body>
+            <h1>Cross-origin subresource</h1>
+            <p id="subresource-status">not-loaded</p>
+            <script src="{new Uri(ExternalSiteUri, "/external-script.js").AbsoluteUri}"></script>
+          </body>
+        </html>
+        """;
+
+    private const string NavigationFixturePage = """
+        <html>
+          <head><title>Navigation Fixture</title></head>
+          <body>
+            <h1>Navigation Fixture</h1>
+            <a href="/same-origin-destination" aria-label="Same-origin link">Same-origin link</a>
+            <a href="https://example.com/" aria-label="External link">External link</a>
+            <a href="https://example.com/" target="_blank" aria-label="External popup">External popup</a>
+            <form method="get" action="/submitted">
+              <label for="same-origin-search">Same-origin search</label>
+              <input id="same-origin-search" name="search" />
+              <button type="submit" aria-label="Same-origin form submit">Submit same-origin form</button>
+            </form>
+            <form method="get" action="https://example.com/">
+              <button type="submit" aria-label="External form submit">Submit external form</button>
+            </form>
+            <button type="button" aria-label="External script navigation" onclick="window.location='https://example.com/'">External script navigation</button>
+          </body>
+        </html>
+        """;
+
+    private const string SnapshotFixturePage = """
+        <html>
+          <head><title>Snapshot Fixture</title></head>
+          <body>
+            <h1>Snapshot Fixture</h1>
+            <div style="display:none">
+              <button type="button" aria-label="Responsive action">Hidden responsive action</button>
+            </div>
+            <button type="button" aria-label="Responsive action">Visible responsive action</button>
+
+            <label for="explicit-search">Explicit Search</label>
+            <input id="explicit-search" />
+
+            <label>
+              Wrapped Search
+              <input id="wrapped-search" />
+            </label>
+
+            <span id="save-label">Save changes</span>
+            <button type="button" aria-labelledby="save-label"></button>
+
+            <button type="button" aria-label="ARIA Save">Inner text should not win</button>
+            <button type="button" aria-label="Disabled action" disabled>Disabled action</button>
+          </body>
+        </html>
+        """;
 
     private const string HomePage = """
         <html>
@@ -193,7 +301,7 @@ internal sealed class FakeSite : IAsyncDisposable
             <a href="/tools/rules-core">Rules Core</a>
             <form method="get" action="/submitted">
               <label for="search">Search</label>
-              <input id="search" name="search" aria-label="Search" />
+              <input id="search" name="search" />
               <button type="submit" aria-label="Submit">Submit</button>
             </form>
             <button type="button" aria-label="Increment" onclick="document.getElementById('count').textContent='1'">Increment</button>
