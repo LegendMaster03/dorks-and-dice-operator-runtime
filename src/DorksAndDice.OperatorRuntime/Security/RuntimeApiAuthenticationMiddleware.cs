@@ -10,7 +10,7 @@ public sealed class RuntimeApiAuthenticationMiddleware(
 {
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/api/v1", StringComparison.Ordinal))
+        if (!RequiresRuntimeAuthentication(context.Request.Path))
         {
             await next(context);
             return;
@@ -28,6 +28,10 @@ public sealed class RuntimeApiAuthenticationMiddleware(
 
         await next(context);
     }
+
+    private static bool RequiresRuntimeAuthentication(PathString path) =>
+        path.StartsWithSegments("/api/v1", StringComparison.Ordinal)
+        || path.StartsWithSegments("/mcp", StringComparison.Ordinal);
 
     private static bool FixedTimeEquals(string supplied, string? expected)
     {

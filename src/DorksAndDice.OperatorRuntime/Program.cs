@@ -1,8 +1,11 @@
+using DorksAndDice.OperatorRuntime.AgentProtocol;
 using DorksAndDice.OperatorRuntime.Api;
 using DorksAndDice.OperatorRuntime.Browser;
 using DorksAndDice.OperatorRuntime.Configuration;
 using DorksAndDice.OperatorRuntime.Security;
 using DorksAndDice.OperatorRuntime.Site;
+using ModelContextProtocol.AspNetCore;
+using ModelContextProtocol.Server;
 
 var smokeMode = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
 var smokeRulesCore = args.Contains("--rules-core", StringComparer.OrdinalIgnoreCase);
@@ -23,6 +26,13 @@ builder.Services.AddHttpClient<OperatorBootstrapClient>(client =>
 builder.Services.AddSingleton<BrowserSessionManager>();
 builder.Services.AddSingleton<IBrowserOperations>(services =>
     services.GetRequiredService<BrowserSessionManager>());
+builder.Services
+    .AddMcpServer()
+    .WithHttpTransport(options =>
+    {
+        options.SessionMode = HttpServerSessionMode.Stateless;
+    })
+    .WithTools<BrowserMcpTools>();
 
 var app = builder.Build();
 app.UseMiddleware<RuntimeApiAuthenticationMiddleware>();
@@ -70,6 +80,7 @@ try
     });
 
     app.MapBrowserApi();
+    app.MapMcp("/mcp");
 
     await app.RunAsync();
 }

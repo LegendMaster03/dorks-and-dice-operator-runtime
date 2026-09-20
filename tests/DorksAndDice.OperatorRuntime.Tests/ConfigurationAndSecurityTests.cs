@@ -37,8 +37,11 @@ public sealed class ConfigurationAndSecurityTests
         Assert.Contains("DORKS_OPERATOR_TOKEN", exception.Message);
     }
 
-    [Fact]
-    public async Task RuntimeApiIsNotAnonymous()
+    [Theory]
+    [InlineData("/api/v1/browser/status")]
+    [InlineData("/mcp")]
+    [InlineData("/mcp/")]
+    public async Task RuntimeControlSurfacesAreNotAnonymous(string path)
     {
         var options = new OperatorRuntimeOptions
         {
@@ -56,14 +59,20 @@ public sealed class ConfigurationAndSecurityTests
             options);
 
         var anonymous = new DefaultHttpContext();
-        anonymous.Request.Path = "/api/v1/browser/status";
+        anonymous.Request.Path = path;
         anonymous.Response.Body = new MemoryStream();
         await middleware.InvokeAsync(anonymous);
         Assert.Equal(StatusCodes.Status401Unauthorized, anonymous.Response.StatusCode);
         Assert.False(called);
 
+        var responseBody = new StreamReader(anonymous.Response.Body);
+        anonymous.Response.Body.Position = 0;
+        var unauthorizedText = await responseBody.ReadToEndAsync();
+        Assert.DoesNotContain(options.RuntimeApiToken!, unauthorizedText, StringComparison.Ordinal);
+        Assert.DoesNotContain(options.OperatorToken, unauthorizedText, StringComparison.Ordinal);
+
         var authorized = new DefaultHttpContext();
-        authorized.Request.Path = "/api/v1/browser/status";
+        authorized.Request.Path = path;
         authorized.Request.Headers.Authorization = "Bearer separate-runtime-secret";
         authorized.Response.Body = new MemoryStream();
         await middleware.InvokeAsync(authorized);

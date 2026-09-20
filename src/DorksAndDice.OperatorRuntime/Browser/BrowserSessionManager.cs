@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DorksAndDice.OperatorRuntime.Configuration;
 using DorksAndDice.OperatorRuntime.Site;
 using Microsoft.Playwright;
@@ -142,7 +143,10 @@ public sealed class BrowserSessionManager(
                         role,
                         name,
                         type,
-                        disabled));
+                        disabled,
+                        await GetControlValueAsync(handle, type),
+                        await GetCheckedStateAsync(handle),
+                        await GetSelectOptionsAsync(handle)));
                 }
                 catch (PlaywrightException)
                 {
@@ -185,6 +189,8 @@ public sealed class BrowserSessionManager(
                 {
                     Timeout = (float)options.BrowserTimeout.TotalMilliseconds
                 });
+                await WaitForPageSettleAsync(session.Page);
+                ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Fill completed.");
             },
             cancellationToken);
@@ -213,9 +219,71 @@ public sealed class BrowserSessionManager(
                 {
                     await element.PressAsync(key);
                 }
+
                 await WaitForPageSettleAsync(session.Page);
                 ThrowIfAuthenticationLost(session);
                 return await ActionResultAsync(session, "Key press completed.");
+            },
+            cancellationToken);
+
+    public Task<BrowserActionResult> SelectOptionAsync(
+        string elementRef,
+        string? value,
+        string? label,
+        CancellationToken cancellationToken = default) =>
+        ExecutePageOperationAsync(
+            async session =>
+            {
+                var hasValue = !string.IsNullOrWhiteSpace(value);
+                var hasLabel = !string.IsNullOrWhiteSpace(label);
+                if (hasValue == hasLabel)
+                {
+                    throw new ArgumentException("Supply exactly one select option value or label.");
+                }
+
+                var element = session.ResolveElement(elementRef);
+                session.ClearElementReferences();
+
+                var option = hasValue
+                    ? new SelectOptionValue { Value = value }
+                    : new SelectOptionValue { Label = label };
+
+                var selected = await element.SelectOptionAsync(
+                    option,
+                    new ElementHandleSelectOptionOptions
+                    {
+                        Timeout = (float)options.BrowserTimeout.TotalMilliseconds
+                    });
+
+                if (selected.Count == 0)
+                {
+                    throw new InvalidOperationException("The requested select option was not available.");
+                }
+
+                await WaitForPageSettleAsync(session.Page);
+                ThrowIfAuthenticationLost(session);
+                return await ActionResultAsync(session, "Selection completed.");
+            },
+            cancellationToken);
+
+    public Task<BrowserActionResult> SetCheckedAsync(
+        string elementRef,
+        bool isChecked,
+        CancellationToken cancellationToken = default) =>
+        ExecutePageOperationAsync(
+            async session =>
+            {
+                var element = session.ResolveElement(elementRef);
+                session.ClearElementReferences();
+                await element.SetCheckedAsync(
+                    isChecked,
+                    new ElementHandleSetCheckedOptions
+                    {
+                        Timeout = (float)options.BrowserTimeout.TotalMilliseconds
+                    });
+                await WaitForPageSettleAsync(session.Page);
+                ThrowIfAuthenticationLost(session);
+                return await ActionResultAsync(session, "Checked state updated.");
             },
             cancellationToken);
 
@@ -594,6 +662,87 @@ public sealed class BrowserSessionManager(
         return normalized.Length == 0 ? null : Truncate(normalized, ElementNameLimit);
     }
 
+    private static async Task<string?> GetControlValueAsync(IElementHandle element, string? type)
+    {
+        if (string.Equals(type, "password", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var value = await element.EvaluateAsync<string?>(
+            """
+            element => {
+                const tagName = element.tagName.toLowerCase();
+                if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+                    return element.value ?? null;
+                }
+
+                if (element.isContentEditable) {
+                    return element.innerText ?? null;
+                }
+
+                return null;
+            }
+            """);
+
+        if (value is null)
+        {
+            return null;
+        }
+
+        var normalized = NormalizeText(value);
+        return normalized.Length == 0 ? string.Empty : Truncate(normalized, ElementNameLimit);
+    }
+
+    private static Task<bool?> GetCheckedStateAsync(IElementHandle element) =>
+        element.EvaluateAsync<bool?>(
+            """
+            element => {
+                const tagName = element.tagName.toLowerCase();
+                const type = (element.getAttribute('type') || '').toLowerCase();
+                if (tagName === 'input' && (type === 'checkbox' || type === 'radio')) {
+                    return !!element.checked;
+                }
+
+                const ariaChecked = element.getAttribute('aria-checked');
+                if (ariaChecked === 'true') return true;
+                if (ariaChecked === 'false') return false;
+                return null;
+            }
+            """);
+
+    private static async Task<IReadOnlyList<SnapshotOption>?> GetSelectOptionsAsync(IElementHandle element)
+    {
+        var raw = await element.EvaluateAsync<JsonElement>(
+            """
+            element => element.tagName.toLowerCase() === 'select'
+                ? Array.from(element.options).slice(0, 100).map(option => ({
+                    value: option.value || '',
+                    label: (option.label || option.textContent || '').replace(/\s+/g, ' ').trim(),
+                    selected: !!option.selected,
+                    disabled: !!option.disabled
+                }))
+                : null
+            """);
+
+        if (raw.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = new List<SnapshotOption>();
+        foreach (var option in raw.EnumerateArray())
+        {
+            result.Add(new SnapshotOption(
+                option.GetProperty("value").GetString() ?? string.Empty,
+                Truncate(NormalizeText(option.GetProperty("label").GetString() ?? string.Empty), ElementNameLimit),
+                option.GetProperty("selected").GetBoolean(),
+                option.GetProperty("disabled").GetBoolean()));
+        }
+
+        return result;
+    }
+
     private async Task WaitForPageSettleAsync(IPage page)
     {
         try
@@ -637,10 +786,6 @@ public sealed class BrowserSessionManager(
         BrowserSession session,
         CancellationToken cancellationToken)
     {
-        // An aborted top-level navigation can asynchronously commit Chromium's
-        // internal error page after the initiating Playwright action returns.
-        // Always discard the affected context so no foreign or error-page state
-        // can become the next usable Operator Runtime session.
         session.ClearElementReferences();
         return TryRecoverAfterFailureAsync(cancellationToken);
     }

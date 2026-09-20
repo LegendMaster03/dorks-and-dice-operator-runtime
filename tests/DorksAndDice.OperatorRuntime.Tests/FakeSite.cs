@@ -17,6 +17,7 @@ internal sealed class FakeSite : IAsyncDisposable
     private readonly WebApplication _externalApp;
     private readonly ConcurrentDictionary<string, byte> _bootstraps = new(StringComparer.Ordinal);
     private int _mutationCount;
+    private int _rulingCount;
 
     private FakeSite(bool rejectOperator)
     {
@@ -113,7 +114,37 @@ internal sealed class FakeSite : IAsyncDisposable
 
         _app.MapGet("/tools/rules-core", (HttpContext context) =>
             BrowserAuthorized(context)
-                ? Results.Content("<html><head><title>Rules Core</title></head><body><h1>Rules Core</h1></body></html>", "text/html")
+                ? Results.Content(RulesCoreHomePage, "text/html")
+                : Results.Redirect("/account/login"));
+
+        _app.MapGet("/tools/rules-core/adjudication", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content(RulesCoreAdjudicationPage, "text/html")
+                : Results.Redirect("/account/login"));
+
+        _app.MapPost("/tools/rules-core/adjudication/resolve", async (HttpContext context) =>
+        {
+            if (!BrowserAuthorized(context))
+            {
+                return Results.Redirect("/account/login");
+            }
+
+            var form = await context.Request.ReadFormAsync();
+            Interlocked.Increment(ref _rulingCount);
+            var outcome = System.Net.WebUtility.HtmlEncode(form["outcome"].ToString());
+            var confidence = System.Net.WebUtility.HtmlEncode(form["confidence"].ToString());
+            var rationale = System.Net.WebUtility.HtmlEncode(form["rationale"].ToString());
+            var reviewed = form.ContainsKey("reviewedEvidence") ? "yes" : "no";
+            return Results.Content(
+                $"<html><head><title>Ruling Recorded</title></head><body><h1>Ruling recorded</h1><p>Outcome: {outcome}</p><p>Confidence: {confidence}</p><p>Evidence reviewed: {reviewed}</p><p>{rationale}</p></body></html>",
+                "text/html");
+        });
+
+        _app.MapGet("/tools/rules-core/publication", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content(
+                    "<html><head><title>Rules Core Publication</title></head><body><h1>Publication</h1><p>Publication is a separate explicit operation.</p><button type='button' aria-label='Publish approved ruling'>Publish approved ruling</button></body></html>",
+                    "text/html")
                 : Results.Redirect("/account/login"));
 
         _app.MapGet("/same-origin-destination", (HttpContext context) =>
@@ -196,6 +227,7 @@ internal sealed class FakeSite : IAsyncDisposable
     public string? LastBootstrapUrl { get; private set; }
     public ConcurrentQueue<RequestRecord> Requests { get; } = new();
     public int MutationCount => Volatile.Read(ref _mutationCount);
+    public int RulingCount => Volatile.Read(ref _rulingCount);
 
     public static async Task<FakeSite> StartAsync(bool rejectOperator = false)
     {
@@ -241,6 +273,57 @@ internal sealed class FakeSite : IAsyncDisposable
             <h1>Cross-origin subresource</h1>
             <p id="subresource-status">not-loaded</p>
             <script src="{new Uri(ExternalSiteUri, "/external-script.js").AbsoluteUri}"></script>
+          </body>
+        </html>
+        """;
+
+    private const string RulesCoreHomePage = """
+        <html>
+          <head><title>Rules Core</title></head>
+          <body>
+            <h1>Rules Core</h1>
+            <nav>
+              <a href="/tools/rules-core/adjudication" aria-label="Adjudication Queue">Adjudication Queue</a>
+              <a href="/tools/rules-core/publication" aria-label="Publication">Publication</a>
+            </nav>
+          </body>
+        </html>
+        """;
+
+    private const string RulesCoreAdjudicationPage = """
+        <html>
+          <head><title>Rules Core Adjudication</title></head>
+          <body>
+            <h1>Adjudication Queue</h1>
+            <article>
+              <h2>Rule candidate R-1001</h2>
+              <p>Deterministic evidence for an adjudication test item.</p>
+              <form method="post" action="/tools/rules-core/adjudication/resolve">
+                <label for="outcome">Ruling outcome</label>
+                <select id="outcome" name="outcome">
+                  <option value="">Choose an outcome</option>
+                  <option value="approve">Approve normal ruling</option>
+                  <option value="clarify">Ask a human</option>
+                  <option value="escalate">Escalate for manual resolution</option>
+                </select>
+
+                <fieldset>
+                  <legend>Confidence</legend>
+                  <label><input type="radio" name="confidence" value="high" /> High confidence</label>
+                  <label><input type="radio" name="confidence" value="low" /> Low confidence</label>
+                </fieldset>
+
+                <label>
+                  <input type="checkbox" name="reviewedEvidence" value="true" />
+                  Evidence reviewed
+                </label>
+
+                <label for="rationale">Rationale or focused human question</label>
+                <textarea id="rationale" name="rationale"></textarea>
+
+                <button type="submit" aria-label="Record ruling">Record ruling</button>
+              </form>
+            </article>
           </body>
         </html>
         """;

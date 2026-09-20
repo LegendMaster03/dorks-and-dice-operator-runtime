@@ -26,6 +26,12 @@ public static class BrowserApiEndpoints
         group.MapPost("/press", async (PressRequest request, IBrowserOperations browser, CancellationToken ct) =>
             await ExecuteAsync(() => browser.PressAsync(request.Ref, request.Key, ct)));
 
+        group.MapPost("/select", async (SelectOptionRequest request, IBrowserOperations browser, CancellationToken ct) =>
+            await ExecuteAsync(() => browser.SelectOptionAsync(request.Ref, request.Value, request.Label, ct)));
+
+        group.MapPost("/set-checked", async (SetCheckedRequest request, IBrowserOperations browser, CancellationToken ct) =>
+            await ExecuteAsync(() => browser.SetCheckedAsync(request.Ref, request.Checked, ct)));
+
         group.MapGet("/screenshot", async (IBrowserOperations browser, CancellationToken ct) =>
             await ExecuteAsync(() => browser.ScreenshotAsync(ct)));
 

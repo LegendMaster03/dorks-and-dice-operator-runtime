@@ -9,12 +9,21 @@ public sealed record BrowserStatus(
     Guid? OperatorUserId,
     string? OperatorDisplayName);
 
+public sealed record SnapshotOption(
+    string Value,
+    string Label,
+    bool Selected,
+    bool Disabled);
+
 public sealed record SnapshotElement(
     string Ref,
     string Role,
     string? Name,
     string? Type,
-    bool Disabled);
+    bool Disabled,
+    string? Value = null,
+    bool? Checked = null,
+    IReadOnlyList<SnapshotOption>? Options = null);
 
 public sealed record BrowserSnapshot(
     string Url,
@@ -51,6 +60,8 @@ public sealed record NavigateRequest(string Url);
 public sealed record ClickRequest(string Ref);
 public sealed record FillRequest(string Ref, string Value);
 public sealed record PressRequest(string? Ref, string Key);
+public sealed record SelectOptionRequest(string Ref, string? Value, string? Label);
+public sealed record SetCheckedRequest(string Ref, bool Checked);
 
 public interface IBrowserOperations
 {
@@ -60,6 +71,15 @@ public interface IBrowserOperations
     Task<BrowserActionResult> ClickAsync(string elementRef, CancellationToken cancellationToken = default);
     Task<BrowserActionResult> FillAsync(string elementRef, string value, CancellationToken cancellationToken = default);
     Task<BrowserActionResult> PressAsync(string? elementRef, string key, CancellationToken cancellationToken = default);
+    Task<BrowserActionResult> SelectOptionAsync(
+        string elementRef,
+        string? value,
+        string? label,
+        CancellationToken cancellationToken = default);
+    Task<BrowserActionResult> SetCheckedAsync(
+        string elementRef,
+        bool isChecked,
+        CancellationToken cancellationToken = default);
     Task<BrowserScreenshot> ScreenshotAsync(CancellationToken cancellationToken = default);
     IReadOnlyList<BrowserConsoleEntry> GetConsole();
     IReadOnlyList<BrowserNetworkError> GetNetworkErrors();
