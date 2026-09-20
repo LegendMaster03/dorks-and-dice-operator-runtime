@@ -234,8 +234,8 @@ public sealed class BrowserSessionManager(
         ExecutePageOperationAsync(
             async session =>
             {
-                var hasValue = !string.IsNullOrWhiteSpace(value);
-                var hasLabel = !string.IsNullOrWhiteSpace(label);
+                var hasValue = value is not null;
+                var hasLabel = label is not null;
                 if (hasValue == hasLabel)
                 {
                     throw new ArgumentException("Supply exactly one select option value or label.");
@@ -245,8 +245,8 @@ public sealed class BrowserSessionManager(
                 session.ClearElementReferences();
 
                 var option = hasValue
-                    ? new SelectOptionValue { Value = value }
-                    : new SelectOptionValue { Label = label };
+                    ? new SelectOptionValue { Value = value! }
+                    : new SelectOptionValue { Label = label! };
 
                 var selected = await element.SelectOptionAsync(
                     option,

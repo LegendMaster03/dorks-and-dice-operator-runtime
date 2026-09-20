@@ -117,6 +117,31 @@ public sealed class AgentProtocolIntegrationTests
             option => option.GetProperty("label").GetString() == "Ask a human"
                 && option.GetProperty("selected").GetBoolean());
 
+        outcomeRef = ElementRef(queue, "Ruling outcome");
+        AssertSuccess(await client.CallToolAsync(
+            "browser.select",
+            Args(
+                ("elementRef", outcomeRef),
+                ("value", ""),
+                ("label", null))));
+
+        queue = Structured(await client.CallToolAsync("browser.snapshot"));
+        outcome = Element(queue, "Ruling outcome");
+        Assert.Equal("", outcome.GetProperty("value").GetString());
+        Assert.Contains(
+            outcome.GetProperty("options").EnumerateArray(),
+            option => option.GetProperty("value").GetString() == ""
+                && option.GetProperty("selected").GetBoolean());
+
+        outcomeRef = ElementRef(queue, "Ruling outcome");
+        AssertSuccess(await client.CallToolAsync(
+            "browser.select",
+            Args(
+                ("elementRef", outcomeRef),
+                ("value", null),
+                ("label", "Ask a human"))));
+
+        queue = Structured(await client.CallToolAsync("browser.snapshot"));
         var rationaleRef = ElementRef(queue, "Rationale or focused human question");
         AssertSuccess(await client.CallToolAsync(
             "browser.fill",
@@ -170,9 +195,11 @@ public sealed class AgentProtocolIntegrationTests
                 ("key", "Enter"))));
         Assert.Equal("Submitted", pressed.GetProperty("title").GetString());
 
-        var screenshot = Structured(await client.CallToolAsync("browser.screenshot"));
-        Assert.Equal("image/png", screenshot.GetProperty("contentType").GetString());
-        Assert.True(screenshot.GetProperty("byteLength").GetInt32() > 100);
+        var screenshotResult = await client.CallToolAsync("browser.screenshot");
+        var screenshot = Assert.IsType<ImageContentBlock>(Assert.Single(screenshotResult.Content));
+        Assert.Equal("image/png", screenshot.MimeType);
+        Assert.NotEmpty(screenshot.DecodedData.ToArray());
+        Assert.Null(screenshotResult.StructuredContent);
 
         var foreign = Structured(await client.CallToolAsync(
             "browser.navigate",

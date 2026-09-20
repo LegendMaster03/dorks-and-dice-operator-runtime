@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using DorksAndDice.OperatorRuntime.Browser;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace DorksAndDice.OperatorRuntime.AgentProtocol;
@@ -132,13 +133,17 @@ public sealed class BrowserMcpTools
         ReadOnly = true,
         Destructive = false,
         Idempotent = true,
-        OpenWorld = false,
-        UseStructuredContent = true)]
-    [Description("Returns an in-memory PNG screenshot of the controlled Dorks & Dice Site page as base64. The runtime does not persist it to disk.")]
-    public static Task<BrowserScreenshot> ScreenshotAsync(
+        OpenWorld = false)]
+    [Description("Returns an in-memory PNG screenshot of the controlled Dorks & Dice Site page as a native MCP image content block (image/png). The runtime does not persist it to disk.")]
+    public static async Task<ImageContentBlock> ScreenshotAsync(
         IBrowserOperations browser,
-        CancellationToken cancellationToken) =>
-        browser.ScreenshotAsync(cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        var screenshot = await browser.ScreenshotAsync(cancellationToken);
+        return ImageContentBlock.FromBytes(
+            Convert.FromBase64String(screenshot.Base64),
+            screenshot.ContentType);
+    }
 
     [McpServerTool(
         Name = "browser.console",
