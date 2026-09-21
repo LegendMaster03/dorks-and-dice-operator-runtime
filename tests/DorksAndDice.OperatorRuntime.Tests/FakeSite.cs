@@ -172,6 +172,11 @@ internal sealed class FakeSite : IAsyncDisposable
                 ? Results.Content(SnapshotFixturePage, "text/html")
                 : Results.Redirect("/account/login"));
 
+        _app.MapGet("/summary-fixture", (HttpContext context) =>
+            BrowserAuthorized(context)
+                ? Results.Content(SummaryFixturePage, "text/html")
+                : Results.Redirect("/account/login"));
+
         _app.MapGet("/cross-origin-subresource", (HttpContext context) =>
             BrowserAuthorized(context)
                 ? Results.Content(CrossOriginSubresourcePage, "text/html")
@@ -345,6 +350,32 @@ internal sealed class FakeSite : IAsyncDisposable
               <button type="submit" aria-label="External form submit">Submit external form</button>
             </form>
             <button type="button" aria-label="External script navigation" onclick="window.location='https://example.com/'">External script navigation</button>
+          </body>
+        </html>
+        """;
+
+    private const string SummaryFixturePage = """
+        <html>
+          <head><title>Summary Fixture</title></head>
+          <body>
+            <h1>Summary Fixture</h1>
+            <details>
+              <summary>Adjudication</summary>
+              <button
+                type="button"
+                aria-label="Rules Lawyer"
+                onclick="document.getElementById('summary-result').textContent='Adjudication Queue visible'">Rules Lawyer</button>
+            </details>
+            <p id="summary-result">Closed</p>
+
+            <a href="/same-origin-destination">Ordinary link</a>
+            <label for="summary-input">Ordinary input</label>
+            <input id="summary-input" />
+            <label for="summary-select">Ordinary select</label>
+            <select id="summary-select">
+              <option value="one">One</option>
+            </select>
+            <button type="button" aria-label="Ordinary button">Ordinary button</button>
           </body>
         </html>
         """;
