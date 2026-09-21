@@ -1,0 +1,19 @@
+services:
+  operator-runtime:
+    image: dorks-and-dice-operator-runtime:latest
+    container_name: dorks-and-dice-operator-runtime
+    restart: unless-stopped
+    shm_size: "1gb"
+    environment:
+      DORKS_SITE_URL: "${DORKS_SITE_URL:?DORKS_SITE_URL must be configured}"
+      DORKS_OPERATOR_TOKEN: "${DORKS_OPERATOR_TOKEN:?DORKS_OPERATOR_TOKEN must be configured}"
+      DORKS_RUNTIME_API_TOKEN: "${DORKS_RUNTIME_API_TOKEN:?DORKS_RUNTIME_API_TOKEN must be configured}"
+      DORKS_BROWSER_HEADLESS: "${DORKS_BROWSER_HEADLESS:-true}"
+      DORKS_BROWSER_TIMEOUT_SECONDS: "${DORKS_BROWSER_TIMEOUT_SECONDS:-30}"
+      ASPNETCORE_URLS: "http://0.0.0.0:8080"
+    networks:
+      - dorks-and-dice-backend
+
+networks:
+  dorks-and-dice-backend:
+    external: true
