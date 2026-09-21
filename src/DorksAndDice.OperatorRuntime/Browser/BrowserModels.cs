@@ -1,13 +1,15 @@
+using System.Text.Json.Serialization;
+
 namespace DorksAndDice.OperatorRuntime.Browser;
 
 public sealed record BrowserStatus(
     bool PlaywrightInitialized,
     bool ChromiumRunning,
     bool AuthenticatedSessionAvailable,
-    string? CurrentUrl,
-    string? PageTitle,
-    Guid? OperatorUserId,
-    string? OperatorDisplayName);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? CurrentUrl,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? PageTitle,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] Guid? OperatorUserId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? OperatorDisplayName);
 
 public sealed record SnapshotOption(
     string Value,
@@ -18,12 +20,12 @@ public sealed record SnapshotOption(
 public sealed record SnapshotElement(
     string Ref,
     string Role,
-    string? Name,
-    string? Type,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Type,
     bool Disabled,
-    string? Value = null,
-    bool? Checked = null,
-    IReadOnlyList<SnapshotOption>? Options = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Value = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] bool? Checked = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] IReadOnlyList<SnapshotOption>? Options = null);
 
 public sealed record BrowserSnapshot(
     string Url,
@@ -53,7 +55,7 @@ public sealed record BrowserNetworkError(
     DateTimeOffset Timestamp,
     string Method,
     string Url,
-    int? Status,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Status,
     string Kind);
 
 public sealed record NavigateRequest(string Url);

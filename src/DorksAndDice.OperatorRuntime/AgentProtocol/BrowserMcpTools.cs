@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Serialization;
 using DorksAndDice.OperatorRuntime.Browser;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -213,10 +214,10 @@ public sealed class BrowserMcpTools
 
 public sealed record AgentBrowserActionResult(
     bool Success,
-    string? Url,
-    string? Title,
-    string? Message,
-    string? Error,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Url,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Title,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Message,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Error,
     bool SessionRecovered,
     bool ActionReplayed)
 {
