@@ -186,6 +186,48 @@ public sealed class BrowserRuntimeIntegrationTests
     }
 
     [Fact]
+    public async Task NativeSummaryControlsUseSemanticRefsAndRevealDetailsContent()
+    {
+        await using var site = await FakeSite.StartAsync();
+        await using var harness = await RuntimeHarness.CreateAsync(site);
+        var manager = harness.Manager;
+
+        await manager.NavigateAsync("/summary-fixture");
+        var initial = await manager.SnapshotAsync();
+
+        var summary = Assert.Single(initial.Elements, element => element.Name == "Adjudication");
+        Assert.Equal("button", summary.Role);
+        Assert.DoesNotContain(initial.Elements, element => element.Name == "Rules Lawyer");
+
+        Assert.Equal(
+            "link",
+            Assert.Single(initial.Elements, element => element.Name == "Ordinary link").Role);
+        Assert.Equal(
+            "textbox",
+            Assert.Single(initial.Elements, element => element.Name == "Ordinary input").Role);
+        Assert.Equal(
+            "combobox",
+            Assert.Single(initial.Elements, element => element.Name == "Ordinary select").Role);
+        Assert.Equal(
+            "button",
+            Assert.Single(initial.Elements, element => element.Name == "Ordinary button").Role);
+
+        await manager.ClickAsync(summary.Ref);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => manager.ClickAsync(summary.Ref));
+
+        var opened = await manager.SnapshotAsync();
+        var rulesLawyer = Assert.Single(opened.Elements, element => element.Name == "Rules Lawyer");
+        Assert.Equal("button", rulesLawyer.Role);
+
+        await manager.ClickAsync(rulesLawyer.Ref);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => manager.ClickAsync(rulesLawyer.Ref));
+
+        var afterRulesLawyer = await manager.SnapshotAsync();
+        Assert.Contains("Adjudication Queue visible", afterRulesLawyer.Text, StringComparison.Ordinal);
+        Assert.Single(afterRulesLawyer.Elements, element => element.Name == "Rules Lawyer");
+    }
+
+    [Fact]
     public async Task FillInvalidatesPreviousSnapshotReferences()
     {
         await using var site = await FakeSite.StartAsync();
