@@ -107,7 +107,7 @@ public sealed class BrowserSessionManager(
 
             var elements = new List<SnapshotElement>();
             var handles = await session.Page
-                .Locator("a,button,input,textarea,select,summary,[role],[contenteditable='true']")
+                .Locator("a,button,input,textarea,select,details > summary:first-of-type,[role],[contenteditable='true']")
                 .ElementHandlesAsync();
 
             foreach (var handle in handles)
