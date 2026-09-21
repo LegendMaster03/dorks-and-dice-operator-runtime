@@ -36,7 +36,11 @@ jobs:
             exit 1
           fi
 
-          docker compose             --project-name dorks-and-dice-operator-runtime             --env-file "$ENV_FILE"             -f docker-compose.yml             config >/dev/null
+          docker compose \
+            --project-name dorks-and-dice-operator-runtime \
+            --env-file "$ENV_FILE" \
+            -f docker-compose.yml \
+            config >/dev/null
 
       - name: Build image
         timeout-minutes: 10
@@ -48,7 +52,12 @@ jobs:
           ENV_FILE=/mnt/HDDs/www/dorks-and-dice-operator-runtime/.env
           docker rm -f dorks-and-dice-operator-runtime-smoketest 2>/dev/null || true
 
-          docker run --rm             --name dorks-and-dice-operator-runtime-smoketest             --shm-size=1g             --env-file "$ENV_FILE"             dorks-and-dice-operator-runtime:latest             --smoke --rules-core
+          docker run --rm \
+            --name dorks-and-dice-operator-runtime-smoketest \
+            --shm-size=1g \
+            --env-file "$ENV_FILE" \
+            dorks-and-dice-operator-runtime:latest \
+            --smoke --rules-core
 
       - name: Deploy
         timeout-minutes: 5
@@ -57,16 +66,25 @@ jobs:
 
           docker rm -f dorks-and-dice-operator-runtime 2>/dev/null || true
 
-          docker compose             --project-name dorks-and-dice-operator-runtime             --env-file "$ENV_FILE"             -f docker-compose.yml             up -d --force-recreate --remove-orphans
+          docker compose \
+            --project-name dorks-and-dice-operator-runtime \
+            --env-file "$ENV_FILE" \
+            -f docker-compose.yml \
+            up -d --force-recreate --remove-orphans
 
       - name: Verify deployed service
         timeout-minutes: 5
         run: |
           ready=false
           for i in {1..60}; do
-            response=$(docker run --rm               --network dorks-and-dice-backend               curlimages/curl:8.12.1               -fsS http://dorks-and-dice-operator-runtime:8080/health/ready               2>/dev/null || true)
+            response=$(docker run --rm \
+              --network dorks-and-dice-backend \
+              curlimages/curl:8.12.1 \
+              -fsS http://dorks-and-dice-operator-runtime:8080/health/ready \
+              2>/dev/null || true)
 
-            if echo "$response" | grep -q '"browserInitialized":true'               && echo "$response" | grep -q '"siteSessionAvailable":true'; then
+            if echo "$response" | grep -q '"browserInitialized":true' \
+              && echo "$response" | grep -q '"siteSessionAvailable":true'; then
               echo "$response"
               ready=true
               break
