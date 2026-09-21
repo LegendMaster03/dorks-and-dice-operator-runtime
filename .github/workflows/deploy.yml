@@ -1,0 +1,81 @@
+name: Deploy Operator Runtime
+run-name: Deploy ${{ github.event.workflow_run.head_branch || github.ref_name }} at ${{ github.event.workflow_run.head_sha || github.sha }}
+
+on:
+  workflow_run:
+    workflows: [ "validation" ]
+    types: [ completed ]
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: dorks-and-dice-operator-runtime
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref_name == 'main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: [self-hosted, dorks-and-dice-operator-runtime]
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Check deployment configuration
+        run: |
+          ENV_FILE=/mnt/HDDs/www/dorks-and-dice-operator-runtime/.env
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "Operator Runtime deployment configuration is missing: $ENV_FILE"
+            exit 1
+          fi
+
+          docker compose             --project-name dorks-and-dice-operator-runtime             --env-file "$ENV_FILE"             -f docker-compose.yml             config >/dev/null
+
+      - name: Build image
+        timeout-minutes: 10
+        run: docker build -t dorks-and-dice-operator-runtime:latest .
+
+      - name: Smoke test image
+        timeout-minutes: 5
+        run: |
+          ENV_FILE=/mnt/HDDs/www/dorks-and-dice-operator-runtime/.env
+          docker rm -f dorks-and-dice-operator-runtime-smoketest 2>/dev/null || true
+
+          docker run --rm             --name dorks-and-dice-operator-runtime-smoketest             --shm-size=1g             --env-file "$ENV_FILE"             dorks-and-dice-operator-runtime:latest             --smoke --rules-core
+
+      - name: Deploy
+        timeout-minutes: 5
+        run: |
+          ENV_FILE=/mnt/HDDs/www/dorks-and-dice-operator-runtime/.env
+
+          docker rm -f dorks-and-dice-operator-runtime 2>/dev/null || true
+
+          docker compose             --project-name dorks-and-dice-operator-runtime             --env-file "$ENV_FILE"             -f docker-compose.yml             up -d --force-recreate --remove-orphans
+
+      - name: Verify deployed service
+        timeout-minutes: 5
+        run: |
+          ready=false
+          for i in {1..60}; do
+            response=$(docker run --rm               --network dorks-and-dice-backend               curlimages/curl:8.12.1               -fsS http://dorks-and-dice-operator-runtime:8080/health/ready               2>/dev/null || true)
+
+            if echo "$response" | grep -q '"browserInitialized":true'               && echo "$response" | grep -q '"siteSessionAvailable":true'; then
+              echo "$response"
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != "true" ]; then
+            echo "Deployed Operator Runtime did not become ready."
+            docker logs dorks-and-dice-operator-runtime || true
+            exit 1
+          fi
