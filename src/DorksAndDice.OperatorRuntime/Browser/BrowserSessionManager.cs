@@ -316,6 +316,9 @@ public sealed class BrowserSessionManager(
 
     internal int OpenPageCountForTest => _session?.Context.Pages.Count ?? 0;
 
+    // Serialize operations against the single controlled page. After each action,
+    // check for cross-origin navigation or popups; recover a lost session without
+    // replaying the action, since its side effects may already have occurred.
     private Task<T> ExecutePageOperationAsync<T>(
         Func<BrowserSession, Task<T>> operation,
         CancellationToken cancellationToken) =>
@@ -400,6 +403,9 @@ public sealed class BrowserSessionManager(
         }
     }
 
+    // A recovered session starts with a fresh Site-issued bootstrap in a new
+    // browser context. Do not retain the prior page or treat recovery as a retry
+    // of the operation that triggered it.
     private async Task RecoverSessionCoreAsync(CancellationToken cancellationToken)
     {
         if (_browser?.IsConnected != true)
@@ -501,6 +507,8 @@ public sealed class BrowserSessionManager(
         }
     }
 
+    // Same-origin navigation alone does not prove authentication. Verify the
+    // normal account route and a browser session cookie before accepting context.
     private async Task VerifyAuthenticatedBrowserAsync(IBrowserContext context, CancellationToken cancellationToken)
     {
         var verificationPage = await context.NewPageAsync();
@@ -771,6 +779,8 @@ public sealed class BrowserSessionManager(
         }
     }
 
+    // An extra page can indicate an uncontrolled popup; only the one established
+    // and same-origin Site page may be used for automated operations.
     private bool IsSessionUsable(BrowserSession? session) =>
         session is not null
         && _browser?.IsConnected == true
